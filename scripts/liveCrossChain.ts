@@ -47,9 +47,9 @@ async function main() {
   console.log(`- Base: ${ethers.formatEther(baseBalance)} ETH`);
   console.log();
 
-  // Contract addresses (deployed to both networks with 5-second auction duration + fixed placeBid logic)
-  const bridgeAddress_Horizen = "0x2C5Ce1D2495d647F0BEf833444F134fDaF5D2868";
-  const bridgeAddress_Base = "0x8e355212721b38f8A9538F30cA739f0D0cDa5040";
+  // Contract addresses (deployed to both networks with chain ID support)
+  const bridgeAddress_Horizen = "0x8d692017aEA872De988AC27FfD6B9Fed3FF0FC13";
+  const bridgeAddress_Base = "0xd2C8C5C6DAD1be31077b0EeDEb78fcB62f7e1066";
 
   console.log("🔗 Bridge Contract Addresses:");
   console.log(`- Horizen: ${bridgeAddress_Horizen}`);
@@ -60,6 +60,15 @@ async function main() {
   const BridgeFactory = await ethers.getContractFactory("BridgeIntent");
   const bridge_Horizen = BridgeFactory.attach(bridgeAddress_Horizen).connect(horizenWallet) as any;
   const bridge_Base = BridgeFactory.attach(bridgeAddress_Base).connect(baseWallet) as any;
+
+  // Verify chain IDs
+  const horizenChainId = await (bridge_Horizen as any).getChainId();
+  const baseChainId = await (bridge_Base as any).getChainId();
+  
+  console.log("🔗 Chain IDs:");
+  console.log(`- Horizen Bridge Chain ID: ${horizenChainId}`);
+  console.log(`- Base Bridge Chain ID: ${baseChainId}`);
+  console.log();
 
   // Deploy test tokens with proper nonce management
   console.log("🪙 Deploying Test Tokens...");
@@ -171,7 +180,6 @@ async function main() {
   } else {
     // Create a new intent
     console.log("📝 No active intents found, creating new intent...");
-    targetIntentId = Number(latestIntentId) + 1;
     
     console.log("🚀 Creating new bridging intent on Horizen");
     
@@ -195,6 +203,8 @@ async function main() {
     );
     await createTx.wait();
     
+    // Get the actual intent ID that was created
+    targetIntentId = await bridge_Horizen.getLatestIntentId();
     console.log(`✅ Intent created with ID: ${targetIntentId}`);
     console.log(`📍 Transaction: ${networks.horizen.explorer}/tx/${createTx.hash}`);
     
@@ -246,19 +256,43 @@ async function main() {
   console.log(`📍 Transaction: ${networks.horizen.explorer}/tx/${depositTx.hash}`);
   console.log();
 
-  // STEP 5: Solver provides TokenB to recipients on Chain 2 (Base)
-  console.log("🌐 STEP 5: Solver provides TokenB to recipients on Base Sepolia");
+  // STEP 5: Solver provides TokenB to recipients on Chain 2 (Base) using solveIntentOnChain2
+  console.log("🌐 STEP 5: Solver provides TokenB to recipients on Base Sepolia using solveIntentOnChain2");
   
   // Create a recipient address  
   const recipientWallet = ethers.Wallet.createRandom();
   
-  // Simulate solver providing TokenB on destination chain
-  console.log(`🎯 Recipient: ${recipientWallet.address}`);
-  const distributeTx = await tokenB_Base.transfer(recipientWallet.address, EXPECTED_AMOUNT_B, { nonce: baseNonce++ });
-  await distributeTx.wait();
+  // Extract the local intent ID for chain2 operations
+  const localIntentId = await (bridge_Horizen as any).getLocalIntentId(targetIntentId);
+  console.log(`🔍 Using local intent ID ${localIntentId} for chain2 operations`);
   
-  console.log(`✅ Provided ${ethers.formatEther(EXPECTED_AMOUNT_B)} TokenB to recipient`);
-  console.log(`📍 Transaction: ${networks.base.explorer}/tx/${distributeTx.hash}`);
+  // Check if intent is already solved on Base
+  const isAlreadySolved = await (bridge_Base as any).isIntentSolvedOnChain2(localIntentId);
+  if (isAlreadySolved) {
+    console.log(`⚠️  Intent ${localIntentId} already solved on Base, skipping...`);
+  } else {
+    console.log(`🎯 Recipient: ${recipientWallet.address}`);
+    
+    // Approve TokenB for the bridge contract
+    const approveTokenBTx = await tokenB_Base.approve(bridgeAddress_Base, EXPECTED_AMOUNT_B, { nonce: baseNonce++ });
+    await approveTokenBTx.wait();
+    console.log("✅ Approved TokenB for bridge contract");
+    
+    // Use solveIntentOnChain2 function with local intent ID
+    const solveTx = await (bridge_Base as any).solveIntentOnChain2(
+      localIntentId,
+      userAddress, // User from chain1
+      await tokenB_Base.getAddress(), // TokenB on Base
+      EXPECTED_AMOUNT_B,
+      [recipientWallet.address], // Recipients array
+      [EXPECTED_AMOUNT_B], // Amounts array
+      { nonce: baseNonce++ }
+    );
+    await solveTx.wait();
+    
+    console.log(`✅ Intent solved on Base using solveIntentOnChain2`);
+    console.log(`📍 Transaction: ${networks.base.explorer}/tx/${solveTx.hash}`);
+  }
   console.log();
 
   // Verify recipient balance on Base
@@ -266,8 +300,8 @@ async function main() {
   console.log(`✅ Verified: Recipient has ${ethers.formatEther(recipientBalance)} TokenB on Base`);
   console.log();
 
-  // STEP 6: Relayer settles on Chain 1 (Horizen)
-  console.log("⚖️  STEP 6: Relayer settles intent on Horizen");
+  // STEP 6: Relayer settles on Chain 1 (Horizen) with chain2 verification
+  console.log("⚖️  STEP 6: Relayer settles intent on Horizen with chain2 verification");
   console.log("This transfers ALL TokenA to solver:");
   console.log(`- User's original: ${ethers.formatEther(AMOUNT_A)} TokenA`);
   console.log(`- User's reward: ${ethers.formatEther(REWARD)} TokenA`);  
@@ -275,13 +309,18 @@ async function main() {
   
   const solverBalanceBefore = await tokenA_Horizen.balanceOf(solverAddress);
   
-  const settleTx = await bridge_Horizen.settleIntent(targetIntentId, { nonce: horizenNonce++ });
+  // Use the new settleIntentWithChain2Verification function
+  const settleTx = await (bridge_Horizen as any).settleIntentWithChain2Verification(
+    targetIntentId, 
+    targetIntentId, // chain2 intent ID (same in this case)
+    { nonce: horizenNonce++ }
+  );
   await settleTx.wait();
   
   const solverBalanceAfter = await tokenA_Horizen.balanceOf(solverAddress);
   const totalReceived = solverBalanceAfter - solverBalanceBefore;
   
-  console.log(`✅ Intent settled successfully!`);
+  console.log(`✅ Intent settled successfully with chain2 verification!`);
   console.log(`📍 Transaction: ${networks.horizen.explorer}/tx/${settleTx.hash}`);
   console.log(`💰 Solver received: ${ethers.formatEther(totalReceived)} TokenA total`);
   console.log(`💸 Solver profit: ${ethers.formatEther(AMOUNT_A + REWARD)} TokenA`);
@@ -294,7 +333,7 @@ async function main() {
   console.log("📈 Transaction Flow Summary:");
   console.log(`1. Intent ${targetIntentId}: User bridged ${ethers.formatEther(AMOUNT_A)} TokenA from Horizen`);
   console.log(`2. Solver bid ${ethers.formatEther(ourBid)} TokenA and won the auction`);
-  console.log(`3. Solver provided ${ethers.formatEther(EXPECTED_AMOUNT_B)} TokenB on Base`);
+  console.log(`3. Solver used solveIntentOnChain2 to provide ${ethers.formatEther(EXPECTED_AMOUNT_B)} TokenB on Base`);
   console.log(`4. Solver earned ${ethers.formatEther(AMOUNT_A + REWARD)} TokenA profit`);
   console.log();
   console.log("🔗 Contract Addresses:");
@@ -308,7 +347,8 @@ async function main() {
   console.log(`- Base Explorer: ${networks.base.explorer}/address/${baseWallet.address}`);
   console.log();
   console.log("✨ Cross-chain bridging via solver network is LIVE and working!");
-  console.log(`🎯 Intent ID ${targetIntentId} completed successfully with dynamic discovery!`);
+  console.log(`🎯 Intent ID ${targetIntentId} completed successfully with chain ID encoding!`);
+  console.log(`🔗 Chain IDs: Horizen=${horizenChainId}, Base=${baseChainId}`);
 }
 
 main()

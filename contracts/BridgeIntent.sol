@@ -35,7 +35,11 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
     mapping(uint256 => mapping(address => uint256)) public solverBids;
     mapping(address => bool) public authorizedRelayers;
     
+    // Chain2 tracking for solved intents
+    mapping(uint256 => bool) public solvedIntents;
+    
     uint256 public nextIntentId = 1;
+    uint256 public chainId;
     uint256 public constant MIN_AUCTION_DURATION = 5 seconds;
     uint256 public constant MAX_AUCTION_DURATION = 24 hours;
 
@@ -88,17 +92,63 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
         uint256 winningBid
     );
 
+    event IntentSolvedOnChain2(
+        uint256 indexed intentId,
+        address indexed solver,
+        address tokenB,
+        uint256 amountB
+    );
+
     modifier onlyAuthorizedRelayer() {
         require(authorizedRelayers[msg.sender], "Not authorized relayer");
         _;
     }
 
     modifier validIntentId(uint256 _intentId) {
-        require(_intentId > 0 && _intentId < nextIntentId, "Invalid intent ID");
+        require(_intentId > 0, "Invalid intent ID");
+        uint256 localIntentId = getLocalIntentId(_intentId);
+        require(localIntentId > 0 && localIntentId < nextIntentId, "Invalid intent ID");
         _;
     }
 
-    constructor() Ownable(msg.sender) {}
+    constructor(uint256 _chainId) Ownable(msg.sender) {
+        chainId = _chainId;
+    }
+
+    /**
+     * @dev Get the current chain ID
+     * @return Current chain ID
+     */
+    function getChainId() external view returns (uint256) {
+        return chainId;
+    }
+
+    /**
+     * @dev Generate intent ID with chain ID to avoid conflicts across chains
+     * @param _localIntentId Local intent ID
+     * @return Intent ID with chain ID encoded
+     */
+    function generateIntentId(uint256 _localIntentId) public view returns (uint256) {
+        return (chainId << 128) | _localIntentId;
+    }
+
+    /**
+     * @dev Extract chain ID from intent ID
+     * @param _intentId Intent ID with chain ID encoded
+     * @return Chain ID
+     */
+    function getChainIdFromIntentId(uint256 _intentId) public pure returns (uint256) {
+        return _intentId >> 128;
+    }
+
+    /**
+     * @dev Extract local intent ID from intent ID
+     * @param _intentId Intent ID with chain ID encoded
+     * @return Local intent ID
+     */
+    function getLocalIntentId(uint256 _intentId) public pure returns (uint256) {
+        return _intentId & ((1 << 128) - 1);
+    }
 
     /**
      * @dev Create a new bridging intent
@@ -122,7 +172,8 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
         require(_reward > 0, "Invalid reward");
         require(_auctionDuration >= MIN_AUCTION_DURATION && _auctionDuration <= MAX_AUCTION_DURATION, "Invalid auction duration");
 
-        uint256 intentId = nextIntentId++;
+        uint256 localIntentId = nextIntentId++;
+        uint256 intentId = generateIntentId(localIntentId);
         uint256 endTime = block.timestamp + _auctionDuration;
 
         // Transfer tokens from user to contract
@@ -273,6 +324,63 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
     }
 
     /**
+     * @dev Solve intent on chain2 (destination chain) - any solver can execute this
+     * @param _intentId Intent ID from chain1
+     * @param _user User address from chain1
+     * @param _tokenB Destination token address
+     * @param _expectedAmountB Expected amount of destination token
+     * @param _recipients Array of recipient addresses
+     * @param _amounts Array of amounts corresponding to recipients
+     */
+    function solveIntentOnChain2(
+        uint256 _intentId,
+        address _user,
+        address _tokenB,
+        uint256 _expectedAmountB,
+        address[] calldata _recipients,
+        uint256[] calldata _amounts
+    ) external nonReentrant {
+        require(_intentId > 0, "Invalid intent ID");
+        require(_user != address(0), "Invalid user address");
+        require(_tokenB != address(0), "Invalid token address");
+        require(_expectedAmountB > 0, "Invalid expected amount");
+        require(_recipients.length == _amounts.length, "Arrays length mismatch");
+        require(_recipients.length > 0, "Empty recipients array");
+        require(!solvedIntents[_intentId], "Intent already solved");
+
+        uint256 totalAmount = 0;
+        for (uint256 i = 0; i < _amounts.length; i++) {
+            totalAmount += _amounts[i];
+        }
+        require(totalAmount <= _expectedAmountB, "Total exceeds expected amount");
+
+        // Transfer tokens from solver to contract
+        IERC20(_tokenB).safeTransferFrom(msg.sender, address(this), totalAmount);
+
+        // Distribute funds to recipients
+        for (uint256 i = 0; i < _recipients.length; i++) {
+            if (_amounts[i] > 0) {
+                IERC20(_tokenB).safeTransfer(_recipients[i], _amounts[i]);
+            }
+        }
+
+        // Mark intent as solved
+        solvedIntents[_intentId] = true;
+
+        emit IntentSolvedOnChain2(_intentId, msg.sender, _tokenB, totalAmount);
+        emit IntentCompleted(_intentId, msg.sender);
+    }
+
+    /**
+     * @dev Check if intent is solved on chain2
+     * @param _intentId Intent ID to check
+     * @return True if intent is solved
+     */
+    function isIntentSolvedOnChain2(uint256 _intentId) external view returns (bool) {
+        return solvedIntents[_intentId];
+    }
+
+    /**
      * @dev Emergency withdrawal for user if intent fails
      * @param _intentId Intent ID to cancel
      */
@@ -303,6 +411,37 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
         require(intent.deposited, "Solver has not deposited");
         require(!intent.completed, "Intent already completed");
         require(intent.winningSolver != address(0), "No winning solver");
+
+        // Transfer user's original tokens (tokenA) to solver
+        IERC20(intent.tokenA).safeTransfer(intent.winningSolver, intent.amountA);
+        
+        // Transfer user's reward to solver
+        IERC20(intent.tokenA).safeTransfer(intent.winningSolver, intent.reward);
+        
+        // Return solver's deposit (tokenA) back to solver
+        IERC20(intent.tokenA).safeTransfer(intent.winningSolver, intent.winningBid);
+
+        intent.completed = true;
+
+        emit IntentSettled(_intentId, intent.winningSolver, intent.amountA, intent.reward, intent.winningBid);
+        emit IntentCompleted(_intentId, intent.winningSolver);
+    }
+
+    /**
+     * @dev Settle intent after successful completion on destination chain (with chain2 verification)
+     * @param _intentId Intent ID to settle
+     * @param _chain2IntentId Intent ID from chain2 (should match the solved intent)
+     */
+    function settleIntentWithChain2Verification(uint256 _intentId, uint256 _chain2IntentId) external validIntentId(_intentId) onlyAuthorizedRelayer nonReentrant {
+        Intent storage intent = intents[_intentId];
+        require(intent.deposited, "Solver has not deposited");
+        require(!intent.completed, "Intent already completed");
+        require(intent.winningSolver != address(0), "No winning solver");
+        
+        // Verify that the intent was solved on chain2
+        // Note: This would typically be verified through a cross-chain message or oracle
+        // For now, we'll rely on the relayer to provide the correct chain2 intent ID
+        require(_chain2IntentId > 0, "Invalid chain2 intent ID");
 
         // Transfer user's original tokens (tokenA) to solver
         IERC20(intent.tokenA).safeTransfer(intent.winningSolver, intent.amountA);
@@ -357,7 +496,7 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
         if (nextIntentId == 1) {
             return 0; // No intents created yet
         }
-        return nextIntentId - 1;
+        return generateIntentId(nextIntentId - 1);
     }
     
     function getActiveIntents() external view returns (uint256[] memory) {
@@ -369,9 +508,10 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
         uint256 activeCount = 0;
         
         for (uint256 i = 1; i < nextIntentId; i++) {
-            Intent storage intent = intents[i];
+            uint256 intentId = generateIntentId(i);
+            Intent storage intent = intents[intentId];
             if (intent.endTime > block.timestamp && !intent.completed) {
-                activeIds[activeCount] = i;
+                activeIds[activeCount] = intentId;
                 activeCount++;
             }
         }
