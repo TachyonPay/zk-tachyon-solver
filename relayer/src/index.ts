@@ -60,6 +60,207 @@ const contracts = {
 // Store for proof verification results
 const proofVerifications = new Map<string, { status: string; jobId?: string; finalized?: boolean }>();
 
+// Store for recipient information (in-memory for now, could be replaced with database)
+const recipientStore = new Map<string, {
+  intentId: string;
+  recipients: string[];
+  amounts: string[];
+  timestamp: number;
+  chainId: number;
+}>();
+
+// Privacy endpoints for recipient information
+app.post('/store-recipients', async (req, res) => {
+  try {
+    const { intentId, recipients, amounts, chainId } = req.body;
+
+    // Validate required fields
+    if (!intentId || !recipients || !amounts || !chainId) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        required: ['intentId', 'recipients', 'amounts', 'chainId'],
+        message: 'All fields are required'
+      });
+    }
+
+    // Validate arrays
+    if (!Array.isArray(recipients) || !Array.isArray(amounts)) {
+      return res.status(400).json({
+        error: 'Invalid data format',
+        message: 'recipients and amounts must be arrays'
+      });
+    }
+
+    if (recipients.length !== amounts.length) {
+      return res.status(400).json({
+        error: 'Array length mismatch',
+        message: 'recipients and amounts arrays must have the same length'
+      });
+    }
+
+    // Validate addresses
+    for (const recipient of recipients) {
+      if (!ethers.isAddress(recipient)) {
+        return res.status(400).json({
+          error: 'Invalid address',
+          message: `Invalid recipient address: ${recipient}`
+        });
+      }
+    }
+
+    // Validate amounts (should be positive numbers)
+    for (const amount of amounts) {
+      if (isNaN(Number(amount)) || Number(amount) <= 0) {
+        return res.status(400).json({
+          error: 'Invalid amount',
+          message: `Invalid amount: ${amount}`
+        });
+      }
+    }
+
+    // Store the recipient information
+    const recipientInfo = {
+      intentId: intentId.toString(),
+      recipients,
+      amounts: amounts.map(a => a.toString()),
+      timestamp: Date.now(),
+      chainId: parseInt(chainId.toString())
+    };
+
+    recipientStore.set(intentId.toString(), recipientInfo);
+
+    console.log(`🔐 Stored recipient info for intent ${intentId}:`);
+    console.log(`   - Recipients: ${recipients.length}`);
+    console.log(`   - Total amount: ${amounts.reduce((sum, amount) => sum + Number(amount), 0)}`);
+    console.log(`   - Chain ID: ${chainId}`);
+
+    res.json({
+      success: true,
+      intentId: intentId.toString(),
+      message: 'Recipient information stored successfully',
+      timestamp: recipientInfo.timestamp
+    });
+
+  } catch (error) {
+    console.error('❌ Error storing recipient information:', error);
+    res.status(500).json({
+      error: 'Failed to store recipient information',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Get recipient information endpoint
+app.get('/get-recipients/:intentId', async (req, res) => {
+  try {
+    const { intentId } = req.params;
+
+    if (!intentId) {
+      return res.status(400).json({
+        error: 'Missing intent ID',
+        required: ['intentId']
+      });
+    }
+
+    const recipientInfo = recipientStore.get(intentId);
+
+    if (!recipientInfo) {
+      return res.status(404).json({
+        error: 'Recipient information not found',
+        message: `No recipient information found for intent ${intentId}`
+      });
+    }
+
+    console.log(`🔍 Retrieved recipient info for intent ${intentId}`);
+
+    res.json({
+      success: true,
+      intentId: recipientInfo.intentId,
+      recipients: recipientInfo.recipients,
+      amounts: recipientInfo.amounts,
+      timestamp: recipientInfo.timestamp,
+      chainId: recipientInfo.chainId,
+      totalAmount: recipientInfo.amounts.reduce((sum, amount) => sum + Number(amount), 0)
+    });
+
+  } catch (error) {
+    console.error('❌ Error retrieving recipient information:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve recipient information',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// List all stored intents (for debugging/admin purposes)
+app.get('/list-stored-intents', async (req, res) => {
+  try {
+    const intents = Array.from(recipientStore.keys()).map(intentId => {
+      const info = recipientStore.get(intentId)!;
+      return {
+        intentId: info.intentId,
+        recipientCount: info.recipients.length,
+        totalAmount: info.amounts.reduce((sum, amount) => sum + Number(amount), 0),
+        timestamp: info.timestamp,
+        chainId: info.chainId
+      };
+    });
+
+    console.log(`📋 Listed ${intents.length} stored intents`);
+
+    res.json({
+      success: true,
+      count: intents.length,
+      intents
+    });
+
+  } catch (error) {
+    console.error('❌ Error listing stored intents:', error);
+    res.status(500).json({
+      error: 'Failed to list stored intents',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Delete recipient information (for privacy/cleanup)
+app.delete('/delete-recipients/:intentId', async (req, res) => {
+  try {
+    const { intentId } = req.params;
+
+    if (!intentId) {
+      return res.status(400).json({
+        error: 'Missing intent ID',
+        required: ['intentId']
+      });
+    }
+
+    const deleted = recipientStore.delete(intentId);
+
+    if (!deleted) {
+      return res.status(404).json({
+        error: 'Recipient information not found',
+        message: `No recipient information found for intent ${intentId}`
+      });
+    }
+
+    console.log(`🗑️  Deleted recipient info for intent ${intentId}`);
+
+    res.json({
+      success: true,
+      intentId,
+      message: 'Recipient information deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Error deleting recipient information:', error);
+    res.status(500).json({
+      error: 'Failed to delete recipient information',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
 // zkVerify proof verification middleware
 const verifyProofForBase = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
   try {
@@ -672,6 +873,11 @@ app.listen(PORT, () => {
   console.log(`🔗 Settle endpoint: http://localhost:${PORT}/settle`);
   console.log(`🔗 Settle with proof endpoint: http://localhost:${PORT}/settle-with-proof`);
   console.log(`🔐 Proof submission endpoint: http://localhost:${PORT}/submit-proof`);
+  console.log(`🔐 Privacy endpoints:`);
+  console.log(`   - Store recipients: http://localhost:${PORT}/store-recipients`);
+  console.log(`   - Get recipients: http://localhost:${PORT}/get-recipients/:intentId`);
+  console.log(`   - List intents: http://localhost:${PORT}/list-stored-intents`);
+  console.log(`   - Delete recipients: http://localhost:${PORT}/delete-recipients/:intentId`);
   console.log(`🔗 Networks configured:`);
   console.log(`   - Horizen (${networks.horizen.chainId}): ${networks.horizen.bridgeAddress}`);
   console.log(`   - Base (${networks.base.chainId}): ${networks.base.bridgeAddress}`);

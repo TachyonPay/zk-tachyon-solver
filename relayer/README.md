@@ -9,6 +9,7 @@ A Node.js relayer service for settling cross-chain bridge intents with SP1 zk pr
 - 🔐 Secure transaction signing
 - ✅ Intent validation and verification
 - 🔐 SP1 zk proof verification for Base destination
+- 🔐 Privacy endpoints for recipient information storage
 - 📊 Health check endpoint
 - 🛡️ Security middleware (helmet, cors)
 
@@ -98,6 +99,99 @@ POST /verify
   "network": "horizen",
   "isSolved": true,
   "message": "Intent is solved on chain2"
+}
+```
+
+### Privacy Endpoints
+
+#### Store Recipient Information
+```http
+POST /store-recipients
+```
+
+**Request Body:**
+```json
+{
+  "intentId": "287647493468149004223305994324593771393899823122",
+  "recipients": [
+    "0x8EA2c2076a1c43817C96cb50f84FD12cd2A42101",
+    "0x4075Bdc413df13a84F8dA8651eC13d7552AE46D5"
+  ],
+  "amounts": [
+    "50000000000000000000",
+    "30000000000000000000"
+  ],
+  "chainId": 84532
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "intentId": "287647493468149004223305994324593771393899823122",
+  "message": "Recipient information stored successfully",
+  "timestamp": 1754550128919
+}
+```
+
+#### Get Recipient Information
+```http
+GET /get-recipients/:intentId
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "intentId": "287647493468149004223305994324593771393899823122",
+  "recipients": [
+    "0x8EA2c2076a1c43817C96cb50f84FD12cd2A42101",
+    "0x4075Bdc413df13a84F8dA8651eC13d7552AE46D5"
+  ],
+  "amounts": [
+    "50000000000000000000",
+    "30000000000000000000"
+  ],
+  "timestamp": 1754550128919,
+  "chainId": 84532,
+  "totalAmount": "80000000000000000000"
+}
+```
+
+#### List All Stored Intents
+```http
+GET /list-stored-intents
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "count": 2,
+  "intents": [
+    {
+      "intentId": "287647493468149004223305994324593771393899823122",
+      "recipientCount": 2,
+      "totalAmount": "80000000000000000000",
+      "timestamp": 1754550128919,
+      "chainId": 84532
+    }
+  ]
+}
+```
+
+#### Delete Recipient Information
+```http
+DELETE /delete-recipients/:intentId
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "intentId": "287647493468149004223305994324593771393899823122",
+  "message": "Recipient information deleted successfully"
 }
 ```
 
