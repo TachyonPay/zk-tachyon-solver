@@ -60,7 +60,7 @@ The relayer operates within a **Trusted Execution Environment (TEE)** to ensure 
 
 1. **Light Client Proof Generation**: When the solver completes an intent on Chain2, the relayer's light client generates a zero-knowledge proof of the transaction
 2. **zkVerify Verification**: The proof is submitted to zkVerify for verification without revealing transaction details
-3. **Settlement**: Only after successful proof verification does the relayer settle the user's funds on Chain1 (Horizen)
+3. **Settlement with Proof**: The relayer uses the `/settle-with-proof` endpoint to ensure cryptographic verification before settling funds on Chain1 (Horizen)
 
 ## 🚀 Key Features
 
@@ -78,6 +78,7 @@ The relayer operates within a **Trusted Execution Environment (TEE)** to ensure 
 - **Light Client Integration**: Generates proofs of cross-chain transaction completion
 - **zkVerify Verification**: Leverages zkVerify's robust proof verification infrastructure
 - **Trust Minimization**: Reduces trust assumptions through cryptographic proofs
+- **Settle-with-Proof**: Dedicated endpoint for cryptographically verified settlements
 
 ## 🏃‍♂️ How It Works
 
@@ -112,12 +113,19 @@ Intent ID → Anonymous Recipients (encrypted in TEE)
 // Light client generates proof of Chain2 completion
 const proof = lightClient.generateProof(chain2Transaction);
 
-// zkVerify verifies the proof
-const verified = await zkVerify.verify(proof);
+// Relayer submits to zkVerify for verification
+const verifyResponse = await zkVerify.verify(proof);
 
-if (verified) {
-  // Settle user's funds on Chain1
-  await settleOnChain1(intentId);
+if (verifyResponse.status === 'Finalized') {
+  // Use settle-with-proof endpoint for cryptographically verified settlement
+  await relayer.settleWithProof({
+    intentId,
+    chain2IntentId,
+    originChainId,
+    destinationChainId,
+    solverAddress,
+    proofData: proof
+  });
 }
 ```
 
@@ -128,6 +136,56 @@ if (verified) {
 - **Anonymous Storage**: Encrypted storage of recipient mappings within TEE
 - **Light Client**: Generates zero-knowledge proofs of cross-chain transactions
 - **zkVerify Interface**: Submits and verifies proofs through zkVerify
+- **Settle-with-Proof Endpoint**: Ensures cryptographic verification before settlement
+
+### Relayer zkVerify Integration
+
+The relayer implements a comprehensive proof verification system:
+
+#### `/settle-with-proof` Endpoint
+```typescript
+POST /settle-with-proof
+{
+  "intentId": "123",
+  "chain2IntentId": "123", 
+  "originChainId": 845320009,
+  "destinationChainId": 84532,
+  "solverAddress": "0x...",
+  "proofData": {
+    "proof": "0x...",
+    "publicSignals": ["..."],
+    "vk": "0x..."
+  }
+}
+```
+
+#### Proof Verification Flow
+1. **Proof Submission**: SP1 proof submitted to zkVerify API
+2. **Optimistic Verification**: Immediate validation of proof structure
+3. **Finalization Polling**: Relayer polls zkVerify until proof is finalized on-chain
+4. **Settlement Authorization**: Only finalized proofs authorize settlement transactions
+
+#### zkVerify API Integration
+```typescript
+// Submit proof to zkVerify
+const submitResponse = await axios.post(`${ZKV_API_URL}/submit-proof/${API_KEY}`, {
+  proofType: "sp1",
+  vkRegistered: false,
+  proofData: {
+    proof: proofData.proof,
+    publicSignals: proofData.publicSignals, 
+    vk: proofData.vk
+  }
+});
+
+// Poll for finalization
+const jobId = submitResponse.data.jobId;
+while (status !== "Finalized") {
+  const statusResponse = await axios.get(`${ZKV_API_URL}/job-status/${API_KEY}/${jobId}`);
+  status = statusResponse.data.status;
+  await sleep(5000);
+}
+```
 
 ### Solver Architecture
 - **Multi-Chain Support**: Operates across Horizen and Base networks
