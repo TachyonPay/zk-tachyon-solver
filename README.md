@@ -2,6 +2,46 @@
 
 A privacy-preserving cross-chain bridge solver that leverages **zkVerify** for zero-knowledge proof verification and **Trusted Execution Environments (TEE)** for anonymous address management, ensuring complete privacy for users bridging assets between Horizen and Base networks.
 
+## 🚨 Problem Statement
+
+Existing cross-chain bridge solutions face critical limitations that our architecture addresses:
+
+### ⏳ **Traditional Bridges: Finality Delays**
+- **Problem**: Conventional bridges wait for block finality (15+ minutes on Ethereum, longer on other chains)
+- **Impact**: Users experience significant delays, poor UX, and capital inefficiency
+- **Our Solution**: Intent-based architecture with competitive solver auctions enables near-instant bridging
+
+### 🔒 **Intent-Based Solutions: Escrow & Secret Complexity**
+- **Problem**: Solutions like 1inch Fusion use complex escrow mechanisms and secret management
+- **Issues**: 
+  - Difficult implementation and maintenance
+  - No privacy preservation for users
+  - Centralized secret management creates vulnerabilities
+- **Our Solution**: TEE-based anonymous address management eliminates complex escrows while ensuring complete privacy
+
+### 🐌 **Oracle-Based Solutions: Settlement Delays**  
+- **Problem**: Across Protocol uses UMA's optimistic oracle system
+- **Issues**:
+  - Long challenge periods (2+ hours) before settlement
+  - Solvers face liquidity uncertainty and delayed capital recovery
+  - Inconsistent liquidity provision due to settlement delays
+- **Our Solution**: zkVerify provides immediate cryptographic proof verification, enabling fast and consistent settlement
+
+### 🕵️ **Privacy Gaps Across All Solutions**
+- **Problem**: Existing bridges link user identities across chains
+- **Impact**: Complete transaction history correlation, privacy violations
+- **Our Solution**: TEE-based anonymous address storage completely breaks user identity links
+
+## ✅ **Our Comprehensive Solution**
+
+| Problem | Traditional Bridges | Intent Solutions | Oracle Solutions | **Our Solution** |
+|---------|-------------------|------------------|------------------|------------------|
+| **Speed** | 15+ min finality | Fast execution | 2+ hour delays | **Near-instant** |
+| **Privacy** | ❌ No privacy | ❌ No privacy | ❌ No privacy | **✅ Complete privacy** |
+| **Complexity** | High | Very High | Medium | **Low with TEE** |
+| **Liquidity** | Locked capital | Escrow complexity | Delayed recovery | **Fast settlement** |
+| **Trust** | Bridge operators | Escrow contracts | Oracle disputes | **Cryptographic proofs** |
+
 ## 🏗️ Architecture Overview
 
 ```
