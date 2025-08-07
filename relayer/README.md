@@ -1,6 +1,6 @@
 # Bridge Relayer Service
 
-A Node.js relayer service for settling cross-chain bridge intents.
+A Node.js relayer service for settling cross-chain bridge intents with SP1 zk proof verification support.
 
 ## Features
 
@@ -8,6 +8,7 @@ A Node.js relayer service for settling cross-chain bridge intents.
 - 🔗 Support for multiple networks (Horizen, Base)
 - 🔐 Secure transaction signing
 - ✅ Intent validation and verification
+- 🔐 SP1 zk proof verification for Base destination
 - 📊 Health check endpoint
 - 🛡️ Security middleware (helmet, cors)
 
@@ -48,6 +49,7 @@ A Node.js relayer service for settling cross-chain bridge intents.
 | `BASE_SEPOLIA_RPC_URL` | Base Sepolia RPC endpoint | `https://sepolia.base.org` |
 | `BRIDGE_CONTRACT_HORIZEN_LATEST` | Bridge contract on Horizen | `0x8d692017aEA872De988AC27FfD6B9Fed3FF0FC13` |
 | `BRIDGE_CONTRACT_BASE_LATEST` | Bridge contract on Base | `0xd2C8C5C6DAD1be31077b0EeDEb78fcB62f7e1066` |
+| `ZKV_API_KEY` | zkVerify API key for proof verification | `your_api_key_here` |
 
 ## API Endpoints
 
@@ -99,7 +101,7 @@ POST /verify
 }
 ```
 
-### Settle Intent
+### Regular Settlement
 ```http
 POST /settle
 ```
@@ -109,7 +111,8 @@ POST /settle
 {
   "intentId": "287647493468149004223305994324593771393899823106",
   "chain2IntentId": "2",
-  "chainId": 845320009,
+  "originChainId": 845320009,
+  "destinationChainId": 84532,
   "solverAddress": "0x93dC72De59c169AA07b23F8D487021e15C57776E"
 }
 ```
@@ -128,6 +131,113 @@ POST /settle
 }
 ```
 
+### Settlement with Proof Verification
+```http
+POST /settle-with-proof
+```
+
+**Request Body:**
+```json
+{
+  "intentId": "287647493468149004223305994324593771393899823106",
+  "chain2IntentId": "2",
+  "originChainId": 845320009,
+  "destinationChainId": 84532,
+  "solverAddress": "0x93dC72De59c169AA07b23F8D487021e15C57776E",
+  "proofData": {
+    "proof": "proof_data_here",
+    "publicSignals": ["signal1", "signal2"],
+    "imageId": "image_id_here"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "transactionHash": "0x...",
+  "blockNumber": 12345,
+  "network": "horizen",
+  "chainId": 845320009,
+  "intentId": "287647493468149004223305994324593771393899823106",
+  "chain2IntentId": "2",
+  "solverAddress": "0x93dC72De59c169AA07b23F8D487021e15C57776E",
+  "proofVerification": {
+    "jobId": "23382e04-3d57-11f0-af7b-32a805cdbfd3",
+    "status": "Finalized",
+    "txHash": "0xc0d85e5d50fff2bb5d192ee108664878e228d7fc3c1faa2d23da891832873d51",
+    "blockHash": "0xcd574432b1a961305bbeb2c6b6ef399e1ae5102593846756cbb472bfd53d7d43"
+  }
+}
+```
+
+### Standalone Proof Submission
+```http
+POST /submit-proof
+```
+
+**Request Body:**
+```json
+{
+  "proofData": {
+    "proof": "proof_data_here",
+    "publicSignals": ["signal1", "signal2"],
+    "imageId": "image_id_here"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "jobId": "23382e04-3d57-11f0-af7b-32a805cdbfd3",
+  "message": "Proof submitted successfully",
+  "status": "Submitted",
+  "optimisticVerify": "success"
+}
+```
+
+### Proof Status Check
+```http
+GET /proof-status/:jobId
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "jobId": "23382e04-3d57-11f0-af7b-32a805cdbfd3",
+  "status": "Finalized",
+  "details": {
+    "jobId": "23382e04-3d57-11f0-af7b-32a805cdbfd3",
+    "status": "Finalized",
+    "statusId": 4,
+    "proofType": "sp1",
+    "chainId": null,
+    "createdAt": "2025-05-30T13:08:11.000Z",
+    "updatedAt": "2025-05-30T13:08:27.000Z",
+    "txHash": "0xc0d85e5d50fff2bb5d192ee108664878e228d7fc3c1faa2d23da891832873d51",
+    "blockHash": "0xcd574432b1a961305bbeb2c6b6ef399e1ae5102593846756cbb472bfd53d7d43"
+  }
+}
+```
+
+## Proof Verification Flow
+
+### For Base Destination (Proof Required)
+1. **Intent Verification**: Check if intent is solved on Base
+2. **Proof Verification**: 
+   - Register verification key with zkVerify
+   - Submit proof for verification
+   - Wait for finalization (up to 5 minutes)
+3. **Settlement**: Proceed with settlement only after proof is finalized
+
+### For Other Destinations (No Proof Required)
+1. **Intent Verification**: Check if intent is solved on destination chain
+2. **Settlement**: Proceed directly with settlement
+
 ## Usage Example
 
 ```bash
@@ -142,23 +252,55 @@ curl -X POST http://localhost:3000/verify \
     "chainId": 845320009
   }'
 
-# Settle an intent (includes verification middleware)
+# Regular settlement (no proof required)
 curl -X POST http://localhost:3000/settle \
   -H "Content-Type: application/json" \
   -d '{
     "intentId": "287647493468149004223305994324593771393899823106",
     "chain2IntentId": "2",
-    "chainId": 845320009,
+    "originChainId": 845320009,
+    "destinationChainId": 84532,
     "solverAddress": "0x93dC72De59c169AA07b23F8D487021e15C57776E"
   }'
+
+# Settlement with proof verification (Base destination)
+curl -X POST http://localhost:3000/settle-with-proof \
+  -H "Content-Type: application/json" \
+  -d '{
+    "intentId": "287647493468149004223305994324593771393899823106",
+    "chain2IntentId": "2",
+    "originChainId": 845320009,
+    "destinationChainId": 84532,
+    "solverAddress": "0x93dC72De59c169AA07b23F8D487021e15C57776E",
+    "proofData": {
+      "proof": "proof_data_here",
+      "publicSignals": ["signal1", "signal2"],
+      "imageId": "image_id_here"
+    }
+  }'
+
+# Standalone proof submission
+curl -X POST http://localhost:3000/submit-proof \
+  -H "Content-Type: application/json" \
+  -d '{
+    "proofData": {
+      "proof": "proof_data_here",
+      "publicSignals": ["signal1", "signal2"],
+      "imageId": "image_id_here"
+    }
+  }'
+
+# Check proof status
+curl http://localhost:3000/proof-status/23382e04-3d57-11f0-af7b-32a805cdbfd3
 ```
 
 ## Error Handling
 
 The service includes comprehensive error handling:
 
-- **400 Bad Request**: Missing parameters, invalid chainId, intent already completed, intent not solved on chain2
+- **400 Bad Request**: Missing parameters, invalid chainId, intent already completed, intent not solved on chain2, invalid proof data
 - **403 Forbidden**: Relayer not authorized
+- **408 Timeout**: Proof verification timeout
 - **500 Internal Server Error**: Transaction failures, network issues, verification failures
 
 ## Security
@@ -168,6 +310,7 @@ The service includes comprehensive error handling:
 - 🌐 CORS enabled for cross-origin requests
 - ✅ Input validation and sanitization
 - 🔍 Intent verification before settlement
+- 🔐 SP1 proof verification for Base destination
 
 ## Development
 
@@ -183,22 +326,29 @@ npm run build
 
 # Start production server
 npm start
+
+# Test proof verification functionality
+npx ts-node ../scripts/testProofVerification.ts
 ```
 
 ## Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Client App    │    │   Relayer API   │    │  Bridge Contract│
-│                 │    │                 │    │                 │
-│ POST /verify    │───▶│ Check solved    │───▶│ solvedIntents   │
-│                 │    │ status          │    │ mapping         │
-│                 │    │                 │    │                 │
-│ POST /settle    │───▶│ Verify Intent   │───▶│ settleIntent... │
-│                 │    │ + Sign Tx       │    │                 │
-│                 │    │                 │    │                 │
-│ Response        │◀───│ Return Result   │◀───│ Transaction     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Client App    │    │   Relayer API   │    │  Bridge Contract│    │   zkVerify      │
+│                 │    │                 │    │                 │    │   API           │
+│ POST /verify    │───▶│ Check solved    │───▶│ solvedIntents   │    │                 │
+│                 │    │ status          │    │ mapping         │    │                 │
+│                 │    │                 │    │                 │    │                 │
+│ POST /settle    │───▶│ Verify Intent   │───▶│ settleIntent... │    │                 │
+│                 │    │ + Sign Tx       │    │                 │    │                 │
+│                 │    │                 │    │                 │    │                 │
+│ POST /settle-   │───▶│ Verify Intent   │───▶│ settleIntent... │◀───│ Proof Verify    │
+│ with-proof      │    │ + Proof Verify  │    │                 │    │                 │
+│                 │    │ + Sign Tx       │    │                 │    │                 │
+│                 │    │                 │    │                 │    │                 │
+│ Response        │◀───│ Return Result   │◀───│ Transaction     │    │                 │
+└─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
 ## License
