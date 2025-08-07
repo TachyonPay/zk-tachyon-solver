@@ -35,7 +35,7 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
     mapping(uint256 => mapping(address => uint256)) public solverBids;
     mapping(address => bool) public authorizedRelayers;
     
-    // Chain2 tracking for solved intents
+    // Chain2 tracking for solved intents - using simple intent IDs
     mapping(uint256 => bool) public solvedIntents;
     
     uint256 public nextIntentId = 1;
@@ -106,8 +106,7 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
 
     modifier validIntentId(uint256 _intentId) {
         require(_intentId > 0, "Invalid intent ID");
-        uint256 localIntentId = getLocalIntentId(_intentId);
-        require(localIntentId > 0 && localIntentId < nextIntentId, "Invalid intent ID");
+        require(_intentId < nextIntentId, "Invalid intent ID");
         _;
     }
 
@@ -124,30 +123,34 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
     }
 
     /**
-     * @dev Generate intent ID with chain ID to avoid conflicts across chains
-     * @param _localIntentId Local intent ID
-     * @return Intent ID with chain ID encoded
+     * @dev Get the latest intent ID
+     * @return Latest intent ID
      */
-    function generateIntentId(uint256 _localIntentId) public view returns (uint256) {
-        return (chainId << 128) | _localIntentId;
+    function getLatestIntentId() external view returns (uint256) {
+        return nextIntentId - 1;
     }
 
     /**
-     * @dev Extract chain ID from intent ID
-     * @param _intentId Intent ID with chain ID encoded
-     * @return Chain ID
+     * @dev Get active intents (not completed)
+     * @return Array of active intent IDs
      */
-    function getChainIdFromIntentId(uint256 _intentId) public pure returns (uint256) {
-        return _intentId >> 128;
-    }
-
-    /**
-     * @dev Extract local intent ID from intent ID
-     * @param _intentId Intent ID with chain ID encoded
-     * @return Local intent ID
-     */
-    function getLocalIntentId(uint256 _intentId) public pure returns (uint256) {
-        return _intentId & ((1 << 128) - 1);
+    function getActiveIntents() external view returns (uint256[] memory) {
+        uint256 count = 0;
+        for (uint256 i = 1; i < nextIntentId; i++) {
+            if (!intents[i].completed) {
+                count++;
+            }
+        }
+        
+        uint256[] memory activeIntents = new uint256[](count);
+        uint256 index = 0;
+        for (uint256 i = 1; i < nextIntentId; i++) {
+            if (!intents[i].completed) {
+                activeIntents[index] = i;
+                index++;
+            }
+        }
+        return activeIntents;
     }
 
     /**
@@ -172,8 +175,7 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
         require(_reward > 0, "Invalid reward");
         require(_auctionDuration >= MIN_AUCTION_DURATION && _auctionDuration <= MAX_AUCTION_DURATION, "Invalid auction duration");
 
-        uint256 localIntentId = nextIntentId++;
-        uint256 intentId = generateIntentId(localIntentId);
+        uint256 intentId = nextIntentId++;
         uint256 endTime = block.timestamp + _auctionDuration;
 
         // Transfer tokens from user to contract
@@ -492,39 +494,6 @@ contract BridgeIntent is ReentrancyGuard, Ownable {
     }
 
     // View functions for solvers and UI
-    function getLatestIntentId() external view returns (uint256) {
-        if (nextIntentId == 1) {
-            return 0; // No intents created yet
-        }
-        return generateIntentId(nextIntentId - 1);
-    }
-    
-    function getActiveIntents() external view returns (uint256[] memory) {
-        if (nextIntentId == 1) {
-            return new uint256[](0); // No intents created yet
-        }
-        
-        uint256[] memory activeIds = new uint256[](nextIntentId - 1);
-        uint256 activeCount = 0;
-        
-        for (uint256 i = 1; i < nextIntentId; i++) {
-            uint256 intentId = generateIntentId(i);
-            Intent storage intent = intents[intentId];
-            if (intent.endTime > block.timestamp && !intent.completed) {
-                activeIds[activeCount] = intentId;
-                activeCount++;
-            }
-        }
-        
-        // Resize array to actual active count
-        uint256[] memory result = new uint256[](activeCount);
-        for (uint256 i = 0; i < activeCount; i++) {
-            result[i] = activeIds[i];
-        }
-        
-        return result;
-    }
-    
     function getIntentDetails(uint256 intentId) external view returns (
         address tokenA,
         address tokenB,

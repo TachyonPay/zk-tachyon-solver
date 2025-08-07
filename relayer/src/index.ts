@@ -375,12 +375,12 @@ const verifyProofForBase = async (req: express.Request, res: express.Response, n
 // Verify middleware - checks if intent is solved on destination chain
 const verifyIntentSolved = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
   try {
-    const { chain2IntentId, destinationChainId } = req.body;
+    const { intentId, chain2IntentId, destinationChainId } = req.body;
 
-    if (!chain2IntentId || !destinationChainId) {
+    if (!intentId || !destinationChainId) {
       return res.status(400).json({
-        error: 'Missing chain2IntentId or destinationChainId for verification',
-        required: ['chain2IntentId', 'destinationChainId']
+        error: 'Missing intentId or destinationChainId for verification',
+        required: ['intentId', 'destinationChainId']
       });
     }
 
@@ -389,16 +389,18 @@ const verifyIntentSolved = async (req: express.Request, res: express.Response, n
     const destinationNetworkKey = destChainIdNum === networks.horizen.chainId ? 'horizen' : 'base';
     const contract = contracts[destinationNetworkKey];
 
-    console.log(`🔍 Verifying intent ${chain2IntentId} is solved on ${destinationNetworkKey}...`);
+    console.log(`🔍 Verifying intent ${intentId} is solved on ${destinationNetworkKey}...`);
 
     // Check if intent is solved using the solvedIntents mapping on destination chain
-    const isSolved = await contract.solvedIntents(chain2IntentId);
+    // Use the FULL intent ID from chain1, not the local intent ID
+    const isSolved = await contract.solvedIntents(intentId);
     
-    console.log(`📊 Intent ${chain2IntentId} solved status: ${isSolved}`);
+    console.log(`📊 Intent ${intentId} solved status: ${isSolved}`);
 
     if (!isSolved) {
       return res.status(400).json({
         error: 'Intent not solved on destination chain',
+        intentId: intentId,
         chain2IntentId: chain2IntentId,
         destinationNetwork: destinationNetworkKey,
         destinationChainId: destinationChainId,
@@ -406,7 +408,7 @@ const verifyIntentSolved = async (req: express.Request, res: express.Response, n
       });
     }
 
-    console.log(`✅ Intent ${chain2IntentId} verified as solved on ${destinationNetworkKey}`);
+    console.log(`✅ Intent ${intentId} verified as solved on ${destinationNetworkKey}`);
     next();
 
   } catch (error) {
@@ -439,13 +441,13 @@ app.get('/health', (req, res) => {
 // Verify endpoint - check if intent is solved on chain2
 app.post('/verify', async (req, res) => {
   try {
-    const { chain2IntentId, chainId } = req.body;
+    const { intentId, chain2IntentId, chainId } = req.body;
 
     // Validate required parameters
-    if (!chain2IntentId || !chainId) {
+    if (!intentId || !chainId) {
       return res.status(400).json({
         error: 'Missing required parameters',
-        required: ['chain2IntentId', 'chainId']
+        required: ['intentId', 'chainId']
       });
     }
 
@@ -458,30 +460,32 @@ app.post('/verify', async (req, res) => {
       });
     }
 
-    console.log(`🔍 Checking if intent ${chain2IntentId} is solved on chain ${chainId}...`);
+    console.log(`🔍 Checking if intent ${intentId} is solved on chain ${chainId}...`);
 
     // Determine which network to check based on chainId
     const networkKey = chainIdNum === networks.horizen.chainId ? 'horizen' : 'base';
     const contract = contracts[networkKey];
 
     // Check if intent is solved using the solvedIntents mapping
-    const isSolved = await contract.solvedIntents(chain2IntentId);
+    // Use the FULL intent ID from chain1, not the local intent ID
+    const isSolved = await contract.solvedIntents(intentId);
     
-    console.log(`📊 Intent ${chain2IntentId} solved status: ${isSolved}`);
+    console.log(`📊 Intent ${intentId} solved status: ${isSolved}`);
 
     res.json({
       success: true,
+      intentId: intentId,
       chain2IntentId: chain2IntentId,
       chainId: chainId,
-      network: networkKey,
       isSolved: isSolved,
+      network: networkKey,
       message: isSolved ? 'Intent is solved on chain2' : 'Intent is not solved on chain2'
     });
 
   } catch (error) {
     console.error('❌ Error in verify endpoint:', error);
     res.status(500).json({
-      error: 'Failed to check intent solved status',
+      error: 'Failed to verify intent solved status',
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
