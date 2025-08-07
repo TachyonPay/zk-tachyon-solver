@@ -1,251 +1,249 @@
-# Cross-Chain Bridge with Solver Network
+# Bridge Solver with zkVerify & TEE Privacy Architecture
 
-A smart contract-based bridging solution that uses an auction mechanism to connect solvers with users who want to bridge tokens across chains.
+A privacy-preserving cross-chain bridge solver that leverages **zkVerify** for zero-knowledge proof verification and **Trusted Execution Environments (TEE)** for anonymous address management, ensuring complete privacy for users bridging assets between Horizen and Base networks.
 
-## Overview
+## 🏗️ Architecture Overview
 
-This bridging solution operates on a solver network model where:
-1. **Users** create intents to bridge tokens from one chain to another
-2. **Solvers** compete in auctions to fulfill these intents 
-3. **Relayers** verify cross-chain completion and distribute funds
-4. The system rewards the most competitive solvers while ensuring user funds are secure
-
-## Architecture
-
-### Core Components
-
-#### BridgeIntent Contract
-The main contract that handles:
-- Intent creation and auction management
-- Solver bidding and selection
-- Fund escrow and distribution
-- Relayer authorization
-
-#### Intent Structure
-Each bridging intent contains:
-- `tokenA`: Source token address
-- `tokenB`: Destination token address  
-- `amountA`: Amount to bridge from source
-- `expectedAmountB`: Expected amount on destination
-- `reward`: Incentive for the solver
-- `endTime`: Auction deadline
-- `winningSolver`: Address of winning bidder
-- `winningBid`: Amount solver committed to provide
-
-### Workflow
-
-1. **Intent Creation**
-   - User calls `createIntent()` with bridging parameters
-   - Contract escrows user's tokens (tokenA) and reward
-   - `IntentCreated` event emitted for solvers to monitor
-
-2. **Auction Phase**
-   - Solvers monitor for new intents
-   - Place bids using `placeBid()` in **tokenA** (amount they're willing to accept)
-   - Higher bids win the auction
-   - Auction runs until `endTime`
-   - Anyone can call `finalizeAuction()` to determine winner
-
-3. **Solver Execution**
-   - Winning solver calls `depositAndPickup()` to deposit **tokenA** as collateral
-   - Solver provides **tokenB** to recipients on destination chain (off-chain)
-   - Relayer verifies the cross-chain completion
-
-4. **Settlement**
-   - Authorized relayer calls `settleIntent()` after verifying completion
-   - Contract transfers ALL tokenA to solver:
-     - User's original amount + reward + solver's deposit back
-   - Intent is marked as completed
-
-## Smart Contract Functions
-
-### User Functions
-
-#### `createIntent(tokenA, tokenB, amountA, expectedAmountB, reward, auctionDuration)`
-Creates a new bridging intent with specified parameters.
-
-**Parameters:**
-- `tokenA`: Source token contract address
-- `tokenB`: Destination token contract address
-- `amountA`: Amount of source tokens to bridge
-- `expectedAmountB`: Minimum expected tokens on destination
-- `reward`: Reward amount for successful solver
-- `auctionDuration`: How long auction runs (5 min - 24 hours)
-
-#### `cancelIntent(intentId)`
-Emergency cancellation after timeout (1+ hours past auction end).
-
-### Solver Functions
-
-#### `placeBid(intentId, bidAmount)`
-Place or update bid on an intent in **tokenA** (source token).
-
-**Parameters:**
-- `intentId`: Intent to bid on
-- `bidAmount`: Amount of **tokenA** willing to accept (higher bids win)
-
-#### `finalizeAuction(intentId)`
-Determine auction winner after end time (callable by anyone).
-
-#### `depositAndPickup(intentId)`
-Winner deposits their bid amount in **tokenA** as collateral.
-
-### Relayer Functions
-
-#### `settleIntent(intentId)`
-Settle intent after successful cross-chain completion.
-
-Transfers to solver:
-- User's original tokenA amount
-- User's reward 
-- Solver's tokenA deposit back
-
-**Parameters:**
-- `intentId`: Intent to settle
-
-#### `distributeFunds(intentId, recipients, amounts)` (Legacy)
-Legacy function for same-chain scenarios - not used in cross-chain flow.
-
-### Admin Functions
-
-#### `addRelayer(address)` / `removeRelayer(address)`
-Manage authorized relayers (owner only).
-
-## Events
-
-### `IntentCreated`
-```solidity
-event IntentCreated(
-    uint256 indexed intentId,
-    address indexed user,
-    address tokenA,
-    address tokenB, 
-    uint256 amountA,
-    uint256 expectedAmountB,
-    uint256 reward,
-    uint256 endTime
-);
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   User (Chain1) │    │   TEE Relayer    │    │ Solver (Chain2) │
+│    Horizen      │    │   Private Vault  │    │     Base        │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+         │                       │                       │
+         │ 1. Create Intent      │                       │
+         │ + Anonymous Addresses │                       │
+         │──────────────────────▶│                       │
+         │                       │ 2. Store Anon Data   │
+         │                       │    in TEE Enclave    │
+         │                       │                       │
+         │                       │ 3. Intent Created    │
+         │                       │──────────────────────▶│
+         │                       │                       │
+         │                       │ 4. Solver Wins       │
+         │                       │◀──────────────────────│
+         │                       │    Auction & Solves  │
+         │                       │                       │
+         │                       │◀──────────────────────│ 5. Solve Intent
+         │                       │   Send TokenB to      │    on Chain2
+         │                       │   Anonymous Addresses │    (Base)
+         │                       │                       │
+         │                       │ 6. Monitor Chain2     │
+         │                       │    Light Client (LC)  │
+         │                       │    Generate zkProof   │
+         │                       │    of Chain2 Tx       │
+         │                       │                       │
+         │ 7. Verify Proof via   │                       │
+         │    zkVerify & Settle  │                       │
+         │    Funds on Chain1    │                       │
+         │◀──────────────────────│                       │
+         │                       │                       │
+         │                                               │
+         └───────────────────────────────────────────────┘
+                    Cross-Chain Bridge Complete
+                   (User identity unlinkable)
 ```
 
-### `BidPlaced`
-```solidity
-event BidPlaced(
-    uint256 indexed intentId,
-    address indexed solver,
-    uint256 bidAmount,
-    uint256 timestamp
-);
+## 🔐 Privacy-First Design
+
+### TEE-Based Anonymous Address Management
+
+The relayer operates within a **Trusted Execution Environment (TEE)** to ensure complete privacy:
+
+- **Secure Storage**: Anonymous recipient addresses are stored exclusively within the TEE enclave
+- **Zero Knowledge**: The relayer cannot access or leak recipient information outside the secure environment
+- **Link Breaking**: By using anonymous addresses generated by users, we completely break the link between the user's identity on Horizen and their activity on Base
+- **Attestation**: TEE provides cryptographic proof that the code is running in a secure, unmodified environment
+
+### zkVerify Integration
+
+**zkVerify** is used to verify zero-knowledge proofs generated by the light client:
+
+1. **Light Client Proof Generation**: When the solver completes an intent on Chain2, the relayer's light client generates a zero-knowledge proof of the transaction
+2. **zkVerify Verification**: The proof is submitted to zkVerify for verification without revealing transaction details
+3. **Settlement**: Only after successful proof verification does the relayer settle the user's funds on Chain1 (Horizen)
+
+## 🚀 Key Features
+
+### 🛡️ Privacy Preservation
+- **Anonymous Recipients**: Users generate anonymous addresses that are stored securely in TEE
+- **Link Breaking**: Complete separation between user identity on Horizen and Base activity
+- **Zero-Knowledge Proofs**: Transaction validity proven without revealing sensitive information
+
+### ⚡ Cross-Chain Bridge Solving
+- **Intent-Based Architecture**: Users express intent to bridge assets across chains
+- **Competitive Auction**: Solvers compete to fulfill intents at the best rates
+- **Automated Execution**: End-to-end automation from intent creation to settlement
+
+### 🔍 zkVerify Proof System
+- **Light Client Integration**: Generates proofs of cross-chain transaction completion
+- **zkVerify Verification**: Leverages zkVerify's robust proof verification infrastructure
+- **Trust Minimization**: Reduces trust assumptions through cryptographic proofs
+
+## 🏃‍♂️ How It Works
+
+### 1. Intent Creation with Anonymous Addresses
+```typescript
+// User creates intent with anonymous recipient addresses
+const intent = {
+  tokenA: "0x...", // Token on Horizen
+  tokenB: "0x...", // Token on Base  
+  amount: "1000",
+  anonymousRecipients: [
+    "0xAnon1...", // Generated anonymously by user
+    "0xAnon2...", // Stored securely in TEE
+  ],
+  amounts: ["500", "500"]
+};
 ```
 
-### `IntentWon`
-```solidity
-event IntentWon(
-    uint256 indexed intentId,
-    address indexed winningSolver,
-    uint256 winningBid
-);
+### 2. TEE Secure Storage
+The relayer's TEE enclave securely stores the mapping:
+```
+Intent ID → Anonymous Recipients (encrypted in TEE)
 ```
 
-### `SolverDeposited`
-```solidity
-event SolverDeposited(
-    uint256 indexed intentId,
-    address indexed solver,
-    uint256 amount
-);
+### 3. Solver Competition & Execution
+- Solvers compete in auctions to fulfill intents
+- Winning solver deposits tokens and solves the intent on Chain2
+- Funds are distributed to anonymous addresses, breaking user links
+
+### 4. zkVerify Proof & Settlement
+```typescript
+// Light client generates proof of Chain2 completion
+const proof = lightClient.generateProof(chain2Transaction);
+
+// zkVerify verifies the proof
+const verified = await zkVerify.verify(proof);
+
+if (verified) {
+  // Settle user's funds on Chain1
+  await settleOnChain1(intentId);
+}
 ```
 
-### `IntentSettled`
-```solidity
-event IntentSettled(
-    uint256 indexed intentId,
-    address indexed solver,
-    uint256 amountA,
-    uint256 reward,
-    uint256 winningBid
-);
-```
+## 🛠️ Technical Implementation
 
-### `IntentCompleted`
-```solidity
-event IntentCompleted(
-    uint256 indexed intentId,
-    address indexed solver
-);
-```
+### TEE Relayer Components
+- **Secure Enclave**: Runs relayer logic in isolated, attestable environment
+- **Anonymous Storage**: Encrypted storage of recipient mappings within TEE
+- **Light Client**: Generates zero-knowledge proofs of cross-chain transactions
+- **zkVerify Interface**: Submits and verifies proofs through zkVerify
 
-## Usage Example
+### Solver Architecture
+- **Multi-Chain Support**: Operates across Horizen and Base networks
+- **Auction Participation**: Competitive bidding for profitable intents
+- **Cross-Chain Execution**: Handles token approvals, deposits, and distributions
 
-```javascript
-// User creates bridging intent
-await tokenA.approve(bridgeContract.address, amountA + reward);
-await bridgeContract.createIntent(
-    tokenA.address,
-    tokenB.address, 
-    ethers.parseEther("100"),    // 100 tokenA to bridge
-    ethers.parseEther("95"),     // expecting 95 tokenB on destination
-    ethers.parseEther("5"),      // 5 tokenA reward
-    3600                         // 1 hour auction
-);
+## 🔧 Setup & Configuration
 
-// Solvers place competitive bids in tokenA (amount they're willing to accept)
-await tokenA.connect(solver1).approve(bridgeContract.address, ethers.parseEther("96"));
-await bridgeContract.connect(solver1).placeBid(1, ethers.parseEther("96"));
+### Prerequisites
+- Node.js 18+
+- Private keys for solver wallets on both chains
+- Access to zkVerify API
+- TEE-enabled hardware for relayer
 
-await tokenA.connect(solver2).approve(bridgeContract.address, ethers.parseEther("98"));
-await bridgeContract.connect(solver2).placeBid(1, ethers.parseEther("98"));
-
-// After auction ends, finalize
-await bridgeContract.finalizeAuction(1);
-
-// Winner deposits tokenA as collateral
-await bridgeContract.connect(winningSolver).depositAndPickup(1);
-
-// Solver provides tokenB to recipients on destination chain (off-chain)
-// ... solver completes cross-chain transfer ...
-
-// Relayer settles on source chain - transfers all tokenA to solver
-await bridgeContract.connect(relayer).settleIntent(1);
-// Solver receives: user's 100 tokenA + 5 tokenA reward + 98 tokenA deposit back = 203 tokenA total
-```
-
-## Development
-
-### Setup
+### Environment Variables
 ```bash
+# Network Configuration
+HORIZEN_TESTNET_RPC_URL=https://...
+BASE_SEPOLIA_RPC_URL=https://...
+
+# Contract Addresses
+BRIDGE_CONTRACT_HORIZEN_LATEST=0x...
+BRIDGE_CONTRACT_BASE_LATEST=0x...
+
+# Solver Configuration
+PRIVATE_KEY=0x...
+MIN_PROFIT_MARGIN=0.02
+MAX_BID_AMOUNT=1000
+BID_INCREMENT=1
+
+# TEE Relayer
+RELAYER_URL=https://tee-relayer.example.com
+ZKVERIFY_API_URL=https://zkverify.api.url
+```
+
+### Installation & Running
+```bash
+# Install dependencies
 npm install
+
+# Start the solver
+npm run start
+
+# Check solver status
+curl http://localhost:3001/status
+
+# View active intents
+curl http://localhost:3001/active-intents
 ```
 
-### Compile
-```bash
-npx hardhat compile
+## 🔍 API Endpoints
+
+### Solver Status
+```
+GET /health - Health check
+GET /status - Detailed solver status
+GET /active-intents - Current active intents
 ```
 
-### Test
-```bash
-npx hardhat test
+### Intent Management
+```
+GET /intent-status/:intentId/:network - Check specific intent status
+POST /finalize-auction/:intentId - Manually finalize auction
+POST /start - Start solver
+POST /stop - Stop solver
 ```
 
-### Deploy
-```bash
-npx hardhat run scripts/deploy.ts --network <network>
-```
+## 🔒 Security Considerations
 
-## Security Features
+### TEE Security
+- **Attestation**: Verify TEE attestation before trusting relayer
+- **Code Integrity**: Ensure relayer code hasn't been tampered with
+- **Secure Communication**: All communication with TEE over encrypted channels
 
-- **Reentrancy Protection**: All state-changing functions use `nonReentrant` modifier
-- **Access Control**: Relayer authorization system with owner controls
-- **Fund Safety**: Escrow system ensures user funds are protected
-- **Timeout Protection**: Emergency cancellation for stuck intents
-- **Input Validation**: Comprehensive parameter checking
+### zkVerify Trust
+- **Proof Verification**: All cross-chain settlements require valid zkVerify proofs
+- **Light Client Security**: Light client implementation audited for correctness
+- **Verification Parameters**: Proper setup of zkVerify verification parameters
 
-## Gas Optimization
+### Privacy Guarantees
+- **Anonymous Addresses**: Generated client-side, never linked to user identity
+- **TEE Isolation**: Recipient data never leaves the secure enclave
+- **Zero-Knowledge**: Proofs reveal validity without exposing transaction details
 
-- Efficient auction mechanism using array storage
-- Minimal state updates during bidding
-- Batch distribution capability for multiple recipients
-- Events for off-chain monitoring and indexing
+## 🌐 Network Support
 
-## License
+### Horizen Testnet
+- **Chain ID**: 845320009
+- **Explorer**: https://horizen-explorer-testnet.appchain.base.org
+- **Privacy Features**: Enhanced with TEE-based anonymous address management
 
-MIT License
+### Base Sepolia
+- **Chain ID**: 84532  
+- **Explorer**: https://sepolia-explorer.base.org
+- **Integration**: Seamless cross-chain settlement with zkVerify proofs
+
+## 🤝 Contributing
+
+We welcome contributions to enhance the privacy and security features:
+
+1. **TEE Improvements**: Enhance enclave security and performance
+2. **zkVerify Integration**: Optimize proof generation and verification
+3. **Privacy Features**: Additional anonymity and unlinkability improvements
+4. **Testing**: Comprehensive testing of privacy guarantees
+
+## 📜 License
+
+MIT License - see [LICENSE](LICENSE) for details
+
+## 🔗 Links
+
+- **zkVerify**: [zkverify.io](https://zkverify.io)
+- **Horizen**: [horizen.io](https://horizen.io)  
+- **Base**: [base.org](https://base.org)
+- **TEE Standards**: [Trusted Execution Environment specifications](https://trustedcomputinggroup.org/)
+
+---
+
+*This bridge solver demonstrates how zkVerify and TEE technologies can be combined to create truly private cross-chain transactions, breaking user links while maintaining cryptographic security guarantees.*
